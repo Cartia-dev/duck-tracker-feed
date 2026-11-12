@@ -1,0 +1,49 @@
+name: radar
+on:
+  schedule:
+    - cron: "30 15 * * *"   # 15:30 UTC: every Mississippi Flyway night has ended and the archive has caught up
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "How many nights to process, newest first"
+        default: "10"
+      sites:
+        description: "Comma-separated radar ids for a smoke test (empty = all 41)"
+        default: ""
+permissions:
+  contents: write   # pushes the radar-data branch
+  actions: write    # starts the Pages deploy afterwards
+concurrency:
+  group: radar
+  cancel-in-progress: false
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e ./radar   # editable: the site list is read from radar/config next to the package
+      - name: Restore earlier nights from the last published file
+        run: |
+          git fetch --depth=1 origin radar-data 2>/dev/null && git show FETCH_HEAD:nightly.json > prev.json || echo "no earlier file"
+          if [ -s prev.json ]; then nexrad-pipeline seed --from prev.json --out data; fi
+      - name: Process the last nights and export
+        env:
+          DAYS: ${{ inputs.days || '10' }}
+          SITES: ${{ inputs.sites }}
+        run: |
+          nexrad-pipeline daily --days "$DAYS" ${SITES:+--sites "$SITES"} --workers 4 --stride-min 60 --budget-minutes 300 --out data --dest nightly.json
+      - name: Publish nightly.json on the radar-data branch
+        run: |
+          python -c "import json,sys; sys.exit(0 if json.load(open('nightly.json'))['nights'] else 1)" || { echo "no nights processed, not publishing"; exit 1; }
+          mkdir out && cp nightly.json out/ && cd out
+          git init -q -b radar-data
+          git config user.name "radar-bot" && git config user.email "radar-bot@users.noreply.github.com"
+          git add nightly.json && git commit -q -m "nightly radar summary $(date -u +%F)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" radar-data
+      - name: Start the Pages deploy so the new file goes live now
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run fronts.yml --ref main || true

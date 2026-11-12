@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexrad-pipeline"
+version = "0.1.0"
+description = "Nightly bird-movement summaries from NEXRAD Level II radar for the Mississippi Flyway states"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "boto3", "arm_pyart"]
+
+[project.scripts]
+nexrad-pipeline = "nexrad_pipeline.cli:main"
+
+[tool.setuptools]
+packages = ["nexrad_pipeline"]

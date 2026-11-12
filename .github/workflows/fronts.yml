@@ -31,6 +31,10 @@ jobs:
           pip install -q numpy
           curl -sf "https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/snow.json" -o site/snow.json || rm -f site/snow.json
           python3 fetch_snow.py --out site/snow.json --max-age-hours 5.5
+      - name: Carry over nightly.json from the radar-data branch (written by radar.yml)
+        run: |
+          git fetch --depth=1 origin radar-data 2>/dev/null && git show FETCH_HEAD:nightly.json > site/nightly.json || echo "no nightly.json yet"
+          [ -s site/nightly.json ] || rm -f site/nightly.json
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }
