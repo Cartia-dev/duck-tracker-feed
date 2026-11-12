@@ -1,4 +1,4 @@
-name: fronts-feed
+name: feed
 on:
   schedule:
     - cron: "17 * * * *"   # hourly, off the top of the hour; WPC analyses come every 3 h and forecasts twice a day
@@ -25,6 +25,12 @@ jobs:
         run: |
           mkdir site
           python3 fetch_fronts.py --out site/fronts.json
+      - name: Build snow.json (every 6 hours; in between the last published file is carried over)
+        continue-on-error: true   # a failed snow run must not stop the fronts deploy; the old file stays and the app ignores it after 48 h
+        run: |
+          pip install -q numpy
+          curl -sf "https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/snow.json" -o site/snow.json || rm -f site/snow.json
+          python3 fetch_snow.py --out site/snow.json --max-age-hours 5.5
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: site }
