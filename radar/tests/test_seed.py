@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from argparse import Namespace
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from nexrad_pipeline import aggregate, cli
@@ -33,6 +33,14 @@ class SeedTests(unittest.TestCase):
             src.write_text(json.dumps({"schema": "other"}))
             with self.assertRaises(SystemExit):
                 cli.cmd_seed(Namespace(src=str(src), out=a))
+
+    def test_latest_complete_night_at_any_hour(self):
+        at = lambda d, h: datetime(2026, 11, d, h, 0, tzinfo=timezone.utc)
+        self.assertEqual(cli.latest_complete_night(at(12, 10)), date(2026, 11, 10))   # the night of the 11th is still going
+        self.assertEqual(cli.latest_complete_night(at(12, 13)), date(2026, 11, 11))
+        self.assertEqual(cli.latest_complete_night(at(12, 15)), date(2026, 11, 11))   # the scheduled run
+        self.assertEqual(cli.latest_complete_night(at(12, 22)), date(2026, 11, 11))   # a manual evening run
+        self.assertEqual(cli.latest_complete_night(at(13, 0)), date(2026, 11, 11))
 
 
 if __name__ == "__main__":

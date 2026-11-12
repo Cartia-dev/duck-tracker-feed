@@ -20,9 +20,10 @@ TWILIGHT = -6.0  # civil twilight; volumes are kept when the sun is below this
 
 
 def latest_complete_night(now: datetime | None = None) -> date:
-    """Night that finished this morning. Run between about 14:00 and 18:00 UTC."""
+    """Evening date of the newest night that has ended everywhere in the flyway (about 13:00 UTC the next day, after civil twilight).
+    Right at any time of day, so a manual run in the evening does not treat tonight as finished."""
     now = now or datetime.now(timezone.utc)
-    return (now - timedelta(hours=18)).date()
+    return (now - timedelta(hours=13)).date() - timedelta(days=1)
 
 
 def process_site_night(site: Site, night: date, root: str, stride_min: float, force: bool, deadline: float) -> tuple[str, str, str]:
