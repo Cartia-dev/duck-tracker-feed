@@ -1,0 +1,32 @@
+name: fronts-feed
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly, off the top of the hour; WPC analyses come every 3 h and forecasts twice a day
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Build fronts.json from the WPC bulletins
+        run: |
+          mkdir site
+          python3 fetch_fronts.py --out site/fronts.json
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+      - id: deploy
+        uses: actions/deploy-pages@v4
