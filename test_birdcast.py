@@ -1,6 +1,7 @@
 """Offline tests for fetch_birdcast.py. Standard library only: python3 -m unittest test_birdcast"""
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from unittest import mock
 
 import fetch_birdcast as fb
 
@@ -71,6 +72,46 @@ class BirdCastTests(unittest.TestCase):
         wet = [datetime(2026, 11, 11, 3, 0, tzinfo=timezone.utc)]   # the wet hour covers all three profiles
         self.assertEqual(fb.site_nights(site, [date(2026, 11, 10)], wet, texts)["2026-11-10"]["status"], "rain")
         self.assertEqual(fb.site_nights(site, [date(2026, 11, 10)], None, texts)["2026-11-10"]["rain_check"], "BirdCast gaps only")
+
+
+class WeatherFailureTests(unittest.TestCase):
+    def test_no_weather_record_means_no_file(self):
+        with mock.patch.object(fb, "fetch_wet_hours", side_effect=OSError("timed out")), mock.patch.object(fb, "get_day", return_value=None):
+            with self.assertRaises(SystemExit) as cm:
+                fb.build(n_nights=2, end=date(2026, 11, 10))
+        self.assertIn("not rain-screened", str(cm.exception))
+
+    def test_no_weather_on_purpose_is_allowed_and_marked(self):
+        with mock.patch.object(fb, "get_day", return_value=None):
+            doc = fb.build(n_nights=2, end=date(2026, 11, 10), weather=False)
+        rec = next(iter(doc["nights"]["2026-11-10"].values()))
+        self.assertEqual(rec["rain_check"], "BirdCast gaps only")
+
+    def test_old_nights_are_kept_and_only_the_new_ones_are_fetched(self):
+        ids = [x["id"] for x in fb.load_sites()["sites"]]
+        night = lambda check: {i: {"status": "ok", "rain_check": check, "mtr_mean": 123.0} for i in ids}
+        prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-05": night("BirdCast gaps and weather"), "2026-11-04": night("BirdCast gaps only")}}
+        asked = []
+        with mock.patch.object(fb, "fetch_wet_hours", side_effect=lambda sites, first, **k: asked.append(first) or {}), mock.patch.object(fb, "get_day", return_value=None):
+            doc = fb.build(n_nights=3, end=date(2026, 11, 7), reuse=prev)   # nights Nov 7 and 6 are always re-read; Nov 5 is old enough to keep
+        self.assertEqual(doc["nights"]["2026-11-05"]["KNQA"]["mtr_mean"], 123.0)
+        self.assertEqual(len(asked), 1)
+        self.assertGreaterEqual(asked[0].date(), date(2026, 11, 5))   # the weather request starts at the first night that needs it, not at the kept one
+        self.assertEqual(doc["nights"]["2026-11-07"]["KNQA"]["status"], "no_data")   # no BirdCast file in this test
+
+
+    def test_a_night_that_skipped_the_weather_check_is_not_kept(self):
+        ids = [x["id"] for x in fb.load_sites()["sites"]]
+        prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-04": {i: {"status": "ok", "rain_check": "BirdCast gaps only", "mtr_mean": 999.0} for i in ids}}}
+        with mock.patch.object(fb, "fetch_wet_hours", return_value={}), mock.patch.object(fb, "get_day", return_value=None):
+            doc = fb.build(n_nights=1, end=date(2026, 11, 4) + timedelta(days=0), reuse=prev)
+        self.assertNotEqual(doc["nights"]["2026-11-04"]["KNQA"].get("mtr_mean"), 999.0)
+
+    def test_a_partly_missing_night_is_not_kept(self):
+        prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-03": {"KNQA": {"status": "ok", "rain_check": "BirdCast gaps and weather", "mtr_mean": 999.0}}}}
+        with mock.patch.object(fb, "fetch_wet_hours", return_value={}), mock.patch.object(fb, "get_day", return_value=None):
+            doc = fb.build(n_nights=3, end=date(2026, 11, 5), reuse=prev)
+        self.assertNotEqual(doc["nights"]["2026-11-03"]["KNQA"].get("mtr_mean"), 999.0)
 
 
 if __name__ == "__main__":

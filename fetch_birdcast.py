@@ -12,7 +12,8 @@ Per profile: column density = sum of density x layer thickness, traffic rate = s
 Per night: profiles taken with the sun below -6 degrees, grouped by local evening date, averaged the same way the pipeline did.
 Rain: BirdCast leaves layers without a velocity fit when rain gets in the way, and those profiles are left out. As a second opinion the hourly weather record (Open-Meteo)
 is checked at each radar site: a profile within an hour and a half of an hour with 0.1 mm or more is left out too. A night with more than half its profiles left out for
-rain is reported as "rain" with no numbers; mostly missing profiles are "no_data". If the weather record cannot be fetched the run carries on without it and says so.
+rain is reported as "rain" with no numbers; mostly missing profiles are "no_data". If the weather record cannot be fetched (after retries) the run stops without writing anything: better to leave the
+last file up than publish nights that were not screened. --no-weather skips the check on purpose (nights are then marked "BirdCast gaps only").
 Standard library only.
 """
 import argparse, csv, io, json, math, os, sys, time, urllib.error, urllib.parse, urllib.request
@@ -147,15 +148,22 @@ def aggregate_night(profs, n_attempted, n_rain, hours_span):
 
 
 # ---- the weather record as a second opinion on rain (same checks as pipeline/nexrad_pipeline/rain.py) ----
-def fetch_wet_hours(sites, first, timeout=60.0):
+def fetch_wet_hours(sites, first, timeout=90.0, tries=4):
     past = max(1, min(92, (datetime.now(timezone.utc) - first).days + 2))
     out = {}
     for i in range(0, len(sites), 20):
         chunk = sites[i:i + 20]
         q = urllib.parse.urlencode({"latitude": ",".join(str(s["lat"]) for s in chunk), "longitude": ",".join(str(s["lon"]) for s in chunk),
                                     "hourly": "precipitation", "timezone": "UTC", "past_days": past, "forecast_days": 1})
-        with urllib.request.urlopen(f"{OPEN_METEO}?{q}", timeout=timeout) as r:
-            res = json.load(r)
+        for k in range(tries):   # a runner's first connection to the weather service sometimes times out
+            try:
+                with urllib.request.urlopen(f"{OPEN_METEO}?{q}", timeout=timeout) as r:
+                    res = json.load(r)
+                break
+            except Exception:
+                if k == tries - 1:
+                    raise
+                time.sleep(5 * (k + 1) ** 2)
         res = res if isinstance(res, list) else [res]
         if len(res) != len(chunk):
             raise ValueError("unexpected weather response")
@@ -218,8 +226,10 @@ def build(n_nights=10, end=None, reuse=None, weather=True, workers=8):
     nights = [end - timedelta(days=k) for k in range(n_nights)]
     old = {}
     if reuse and reuse.get("record_version") == VERSION and "BirdCast" in str(reuse.get("source", "")):
+        ids = {x["id"] for x in sites}
         for k, recs in reuse.get("nights", {}).items():
-            if date.fromisoformat(k) <= end - timedelta(days=2):   # the newest nights are re-read: late files and sites fill in
+            screened = set(recs) == ids and all(r.get("rain_check") == "BirdCast gaps and weather" for r in recs.values())   # never keep a night that skipped the weather check
+            if screened and date.fromisoformat(k) <= end - timedelta(days=2):   # the newest nights are re-read: late files and sites fill in
                 old[k] = recs
     todo = [n for n in nights if n.isoformat() not in old]
     result = {n.isoformat(): dict(old[n.isoformat()]) for n in nights if n.isoformat() in old}
@@ -228,7 +238,7 @@ def build(n_nights=10, end=None, reuse=None, weather=True, workers=8):
         try:
             wet = fetch_wet_hours(sites, datetime.combine(min(todo) - timedelta(days=1), datetime.min.time(), timezone.utc))
         except Exception as e:
-            print(f"  WARNING: weather record unavailable ({e}); using BirdCast's own gaps only")
+            raise SystemExit(f"weather record unavailable ({e}); not writing a file with nights that were not rain-screened (use --no-weather to allow it)")
     if todo:
         days = sorted({(n + timedelta(days=d)).strftime("%Y%m%d") for n in todo for d in (0, 1)})
         jobs = [(s, ymd) for s in sites for ymd in days]
