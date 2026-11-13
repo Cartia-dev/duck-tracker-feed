@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 
 BASE = "https://birdcastdata.s3.amazonaws.com/nexrad/daily/{site}/{y}/{site}_vpts_{ymd}.csv"
 OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"   # reanalysis, for windows older than the forecast endpoint reaches
 VERSION = 2                  # same record format as the pipeline's: 2 = rain screened
 SOURCE = "BirdCast NEXRAD vertical profiles (vol2bird), Cornell Lab of Ornithology, Colorado State University and UMass Amherst"
 TWILIGHT = -6.0              # profiles count as night when the sun is below this at the radar
@@ -31,7 +32,7 @@ MIN_USABLE = 0.4             # a night needs a velocity fit in at least this sha
 MIN_LAYERS = 3               # layers with density and velocity for a profile to count
 WET_MM, BUFFER_H = 0.1, 1.5
 HERE = os.path.dirname(os.path.abspath(__file__))
-SITE_FILES = [os.path.join(HERE, "sites_mississippi_flyway.json"), os.path.join(HERE, "..", "pipeline", "config", "sites_mississippi_flyway.json")]
+SITE_DIRS = [HERE, os.path.join(HERE, "..", "pipeline", "config")]   # sites_<flyway>_flyway.json files, one per flyway
 
 
 # ---- sun and nights (same maths as pipeline/nexrad_pipeline/solar.py) ----
@@ -86,19 +87,19 @@ def parse_profiles(text):
     out, cur, key = [], None, None
     for r in csv.DictReader(io.StringIO(text)):
         if r["datetime"] != key:
-            key = r["datetime"]
-            cur = {"t": datetime.strptime(key, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc), "radar_h": num(r.get("radar_height")) or 0.0, "layers": []}
+            key = r["datetime"]   # older files carry milliseconds (00:02:00.000Z), newer ones do not
+            cur = {"t": datetime.strptime(key.split(".")[0].rstrip("Z"), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc), "radar_h": num(r.get("radar_height")) or 0.0, "layers": []}
             out.append(cur)
         cur["layers"].append((num(r["height"]), num(r["dens"]), num(r["ff"]), num(r["u"]), num(r["v"])))
     return out
 
 
 def summarise(p):
-    """colden (birds/km^2), mtr (birds/km/h), mean u, v (m/s), mean height above the radar (m), or None without enough layers with a velocity fit."""
+    """colden (birds/km^2), mtr (birds/km/h), south (net southward birds/km/h), mean u, v (m/s), mean height above the radar (m), or None without enough layers with a velocity fit."""
     hs = sorted(h for h, *_ in p["layers"] if h is not None)
     steps = sorted(b - a for a, b in zip(hs, hs[1:]) if b > a)
     dz = (steps[len(steps) // 2] if steps else 100.0) / 1000.0   # layer thickness in km
-    col = mtr = su = sv = sh = 0.0
+    col = mtr = su = sv = sh = south = 0.0
     n = 0
     for h, dens, ff, u, v in p["layers"]:
         if h is None or dens is None or ff is None or u is None or v is None:
@@ -109,9 +110,10 @@ def summarise(p):
         su += dens * u * dz
         sv += dens * v * dz
         sh += dens * (h - p["radar_h"]) * dz
+        south += dens * -v * 3.6 * dz   # birds per km per hour moving south (v is north-positive, so northward birds subtract)
     if n < MIN_LAYERS:
         return None
-    return {"colden": col, "mtr": mtr, "u_bar": su / col if col > 0 else None, "v_bar": sv / col if col > 0 else None, "mean_h": sh / col if col > 0 else None}
+    return {"colden": col, "mtr": mtr, "south": south, "u_bar": su / col if col > 0 else None, "v_bar": sv / col if col > 0 else None, "mean_h": sh / col if col > 0 else None}
 
 
 def aggregate_night(profs, n_attempted, n_rain, hours_span):
@@ -132,6 +134,9 @@ def aggregate_night(profs, n_attempted, n_rain, hours_span):
     rec["mtr_mean"] = round(sum(mtr) / n_ok, 1)
     rec["mtr_peak"] = round(max(mtr), 1)
     rec["precip_frac_mean"] = None   # BirdCast does not publish it
+    south = sum(p["south"] for p in profs) / n_ok
+    rec["south_mean"] = round(south, 1)                      # net southward traffic, birds/km/h, averaged over the night's usable profiles
+    rec["south_km"] = round(south * hours_span, 0)           # birds that crossed each km of front going south during the night (negative = net northward)
     hh = [p["mean_h"] for p in profs if p["mean_h"] is not None]
     rec["mean_height_m"] = round(sum(hh) / len(hh)) if hh else None
     ok = [p for p in profs if p["u_bar"] is not None and p["colden"] > 0]
@@ -148,16 +153,24 @@ def aggregate_night(profs, n_attempted, n_rain, hours_span):
 
 
 # ---- the weather record as a second opinion on rain (same checks as pipeline/nexrad_pipeline/rain.py) ----
-def fetch_wet_hours(sites, first, timeout=90.0, tries=4):
-    past = max(1, min(92, (datetime.now(timezone.utc) - first).days + 2))
+def fetch_wet_hours(sites, first, last=None, timeout=90.0, tries=4):
+    """{site id: [wet hour stamps]} from first to last (UTC). Recent windows use the forecast endpoint's past days, older ones the reanalysis archive."""
+    age = (datetime.now(timezone.utc) - first).days
     out = {}
     for i in range(0, len(sites), 20):
         chunk = sites[i:i + 20]
-        q = urllib.parse.urlencode({"latitude": ",".join(str(s["lat"]) for s in chunk), "longitude": ",".join(str(s["lon"]) for s in chunk),
-                                    "hourly": "precipitation", "timezone": "UTC", "past_days": past, "forecast_days": 1})
+        loc = {"latitude": ",".join(str(s["lat"]) for s in chunk), "longitude": ",".join(str(s["lon"]) for s in chunk), "hourly": "precipitation", "timezone": "UTC"}
+        if age > 85:
+            end = (last or datetime.now(timezone.utc)).date()
+            q = urllib.parse.urlencode(dict(loc, start_date=first.date().isoformat(), end_date=end.isoformat()))
+            base = OPEN_METEO_ARCHIVE
+        else:
+            q = urllib.parse.urlencode(dict(loc, past_days=max(1, min(92, age + 2)), forecast_days=1))
+            base = OPEN_METEO
+        url = f"{base}?{q}"
         for k in range(tries):   # a runner's first connection to the weather service sometimes times out
             try:
-                with urllib.request.urlopen(f"{OPEN_METEO}?{q}", timeout=timeout) as r:
+                with urllib.request.urlopen(url, timeout=timeout) as r:
                     res = json.load(r)
                 break
             except Exception:
@@ -194,13 +207,17 @@ def get_day(site, ymd, tries=3):
 
 
 def site_nights(site, nights, wet, texts):
-    """Records for one site for the given evening dates, from its day files (ymd -> text or None)."""
-    profs = []
-    for ymd, text in texts.items():
-        if text:
-            profs += parse_profiles(text)
+    """Records for one site for the given evening dates, from its day files (ymd -> text or None). Day files are parsed one night at a time and dropped."""
+    parsed = {}
     out = {}
-    for night in nights:
+    for night in sorted(nights):
+        need = {(night + timedelta(days=d)).strftime("%Y%m%d") for d in (0, 1)}
+        for ymd in [k for k in parsed if k not in need]:
+            del parsed[ymd]
+        for ymd in need:
+            if ymd not in parsed:
+                parsed[ymd] = parse_profiles(texts[ymd]) if texts.get(ymd) else []
+        profs = [p for ymd in sorted(need) for p in parsed[ymd]]
         mine = [p for p in profs if night_id(p["t"], site["lon"]) == night and solar_elevation(p["t"], site["lat"], site["lon"]) < TWILIGHT]
         mine.sort(key=lambda p: p["t"])
         dry = [p for p in mine if not is_wet(p["t"], wet)]
@@ -213,50 +230,62 @@ def site_nights(site, nights, wet, texts):
 
 
 def load_sites():
-    for p in SITE_FILES:
-        if os.path.exists(p):
-            return json.load(open(p, encoding="utf-8"))
-    raise SystemExit("sites_mississippi_flyway.json not found")
+    """Every sites_<flyway>_flyway.json in the first folder that has any, merged. Each site gets a `flyway` tag from its file."""
+    import glob
+    for d in SITE_DIRS:
+        files = sorted(glob.glob(os.path.join(d, "sites_*_flyway.json")))
+        if not files:
+            continue
+        sites, states, seen = [], set(), set()
+        for fpath in files:
+            cfg = json.load(open(fpath, encoding="utf-8"))
+            flyway = str(cfg.get("flyway") or os.path.basename(fpath)[len("sites_"):-len("_flyway.json")]).lower()
+            states |= set(cfg.get("states", []))
+            for x in cfg["sites"]:
+                if x["id"] in seen:
+                    raise SystemExit(f"radar {x['id']} is listed twice")
+                seen.add(x["id"])
+                sites.append(dict(x, flyway=flyway))
+        return {"sites": sites, "states": sorted(states)}
+    raise SystemExit("no sites_<flyway>_flyway.json file found")
 
 
-def build(n_nights=10, end=None, reuse=None, weather=True, workers=8):
+def build(n_nights=10, end=None, reuse=None, weather=True, workers=8, site_ids=None, progress=False):
     cfg = load_sites()
-    sites = cfg["sites"]
+    sites = [s for s in cfg["sites"] if not site_ids or s["id"] in site_ids]
     end = end or latest_complete_night()
     nights = [end - timedelta(days=k) for k in range(n_nights)]
     old = {}
     if reuse and reuse.get("record_version") == VERSION and "BirdCast" in str(reuse.get("source", "")):
         ids = {x["id"] for x in sites}
         for k, recs in reuse.get("nights", {}).items():
-            screened = set(recs) == ids and all(r.get("rain_check") == "BirdCast gaps and weather" for r in recs.values())   # never keep a night that skipped the weather check
+            screened = set(recs) >= ids and all(r.get("rain_check") == "BirdCast gaps and weather" and (r["status"] != "ok" or "south_km" in r) for i, r in recs.items() if i in ids)   # never keep a night that skipped the weather check or lacks the southward flux
             if screened and date.fromisoformat(k) <= end - timedelta(days=2):   # the newest nights are re-read: late files and sites fill in
-                old[k] = recs
+                old[k] = {i: r for i, r in recs.items() if i in ids}
     todo = [n for n in nights if n.isoformat() not in old]
     result = {n.isoformat(): dict(old[n.isoformat()]) for n in nights if n.isoformat() in old}
     wet = None
     if weather and todo:
         try:
-            wet = fetch_wet_hours(sites, datetime.combine(min(todo) - timedelta(days=1), datetime.min.time(), timezone.utc))
+            wet = fetch_wet_hours(sites, datetime.combine(min(todo) - timedelta(days=1), datetime.min.time(), timezone.utc), datetime.combine(max(todo) + timedelta(days=2), datetime.min.time(), timezone.utc))
         except Exception as e:
             raise SystemExit(f"weather record unavailable ({e}); not writing a file with nights that were not rain-screened (use --no-weather to allow it)")
     if todo:
         days = sorted({(n + timedelta(days=d)).strftime("%Y%m%d") for n in todo for d in (0, 1)})
-        jobs = [(s, ymd) for s in sites for ymd in days]
         with ThreadPoolExecutor(workers) as ex:
-            got = list(ex.map(lambda j: get_day(j[0]["id"], j[1]), jobs))
-        texts = {}
-        for (s, ymd), text in zip(jobs, got):
-            texts.setdefault(s["id"], {})[ymd] = text
-        for s in sites:
-            recs = site_nights(s, todo, None if wet is None else wet.get(s["id"], []), texts[s["id"]])
-            for k, rec in recs.items():
-                result.setdefault(k, {})[s["id"]] = rec
+            for si, s in enumerate(sites):   # one site at a time, so a season of day files is never held in memory at once
+                texts = dict(zip(days, ex.map(lambda ymd: get_day(s["id"], ymd), days)))
+                recs = site_nights(s, todo, None if wet is None else wet.get(s["id"], []), texts)
+                for k, rec in recs.items():
+                    result.setdefault(k, {})[s["id"]] = rec
+                if progress:
+                    print(f"  {s['id']} done ({si + 1}/{len(sites)})", flush=True)
     return {"schema": "nexrad-nightly/1", "record_version": VERSION, "source": SOURCE, "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "synthetic": False, "flyway_states": cfg.get("states", []),
             "units": {"colden_mean": "birds/km^2", "mtr_mean": "birds/km/h", "mtr_peak": "birds/km/h", "speed_ms": "m/s, ground speed",
                       "dir_deg": "degrees clockwise from north, direction of travel", "mean_height_m": "m above radar"},
             "night_definition": "evening date; sun below -6 degrees; every BirdCast profile that night (about one every 10 minutes)",
-            "sites": {s["id"]: {"name": s["name"], "state": s["state"], "lat": s["lat"], "lon": s["lon"]} for s in sites},
+            "sites": {s["id"]: {"name": s["name"], "state": s["state"], "lat": s["lat"], "lon": s["lon"], "flyway": s["flyway"]} for s in sites},
             "nights": {k: result[k] for k in sorted(result, reverse=True) if result[k]}}
 
 

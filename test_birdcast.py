@@ -25,12 +25,43 @@ class BirdCastTests(unittest.TestCase):
         self.assertAlmostEqual(s["u_bar"], 6.0)
         self.assertAlmostEqual(s["mean_h"], (sum(h for h, *_ in BIRDS) / 6) - 133)   # above the radar, not sea level
 
+    def test_southward_flux_counts_net_movement_only(self):
+        south = [(200 + 100 * i, 20.0, 10.0, 0.0, -10.0) for i in range(6)]    # heading due south at 10 m/s: v = -10
+        north = [(200 + 100 * i, 20.0, 10.0, 0.0, 10.0) for i in range(6)]
+        s = fb.summarise(fb.parse_profiles(HEAD + csv_profile("2026-11-11T03:00:00Z", south))[0])
+        n = fb.summarise(fb.parse_profiles(HEAD + csv_profile("2026-11-11T03:00:00Z", north))[0])
+        self.assertAlmostEqual(s["south"], 20 * 10 * 3.6 * 0.6)    # 432 birds/km/h southward
+        self.assertAlmostEqual(n["south"], -432.0)                  # northward movement is negative
+        mixed = fb.summarise(fb.parse_profiles(HEAD + csv_profile("2026-11-11T03:00:00Z", south[:3] + north[3:]))[0])
+        self.assertAlmostEqual(mixed["south"], 0.0)                 # equal numbers each way cancel
+
+    def test_night_record_carries_the_passage_per_km(self):
+        ok = [dict(colden=10.0, mtr=300.0, south=200.0, u_bar=0.0, v_bar=-5.0, mean_h=400.0)] * 8
+        rec = fb.aggregate_night(ok, 8, 0, 10.0)
+        self.assertEqual((rec["south_mean"], rec["south_km"]), (200.0, 2000.0))    # 200 birds/km/h for 10 hours
+
     def test_layers_without_a_velocity_fit_do_not_count(self):
         gap = [(h, d, None, None, None) for h, d, *_ in BIRDS]
         p = fb.parse_profiles(HEAD + csv_profile("2026-11-11T03:00:00Z", gap))[0]
         self.assertIsNone(fb.summarise(p))                         # density but no velocity: too little to say anything
         two = BIRDS[:2] + [(h, d, None, None, None) for h, d, *_ in BIRDS[2:]]
         self.assertIsNone(fb.summarise(fb.parse_profiles(HEAD + csv_profile("2026-11-11T03:00:00Z", two))[0]))
+
+    def test_older_files_with_milliseconds_parse(self):
+        ps = fb.parse_profiles(HEAD + csv_profile("2025-01-01T00:02:00.000Z", BIRDS))
+        self.assertEqual(ps[0]["t"], datetime(2025, 1, 1, 0, 2, tzinfo=timezone.utc))
+
+    def test_sites_load_from_every_flyway_file_with_a_tag(self):
+        cfg = fb.load_sites()
+        by = {}
+        for s in cfg["sites"]:
+            by.setdefault(s["flyway"], []).append(s["id"])
+        self.assertEqual(sorted(by), ["central", "mississippi"])
+        self.assertEqual(len(cfg["sites"]), len({s["id"] for s in cfg["sites"]}))   # no radar twice
+        self.assertIn("KNQA", by["mississippi"])
+        self.assertIn("KTLX", by["central"])
+        self.assertTrue({"TX", "ND", "AR"} <= set(cfg["states"]))
+        self.assertTrue(all("lat" in s and "lon" in s and "name" in s for s in cfg["sites"]))
 
     def test_parse_groups_rows_by_time(self):
         text = HEAD + csv_profile("2026-11-11T03:00:00Z", BIRDS) + csv_profile("2026-11-11T03:10:00Z", BIRDS[:3])
@@ -39,7 +70,7 @@ class BirdCastTests(unittest.TestCase):
         self.assertEqual(ps[1]["t"], datetime(2026, 11, 11, 3, 10, tzinfo=timezone.utc))
 
     def test_night_record_and_rain_rules(self):
-        ok = [dict(colden=10.0, mtr=300.0, u_bar=3.0, v_bar=0.0, mean_h=400.0)] * 8
+        ok = [dict(colden=10.0, mtr=300.0, south=0.0, u_bar=3.0, v_bar=0.0, mean_h=400.0)] * 8
         rec = fb.aggregate_night(ok, 10, 0, 9.0)
         self.assertEqual((rec["status"], rec["n_failed"], rec["dir_deg"], rec["mtr_mean"]), ("ok", 2, 90.0, 300.0))
         self.assertEqual(fb.aggregate_night(ok[:4], 10, 6, 9.0)["status"], "rain")          # more than half left out for rain
@@ -89,10 +120,10 @@ class WeatherFailureTests(unittest.TestCase):
 
     def test_old_nights_are_kept_and_only_the_new_ones_are_fetched(self):
         ids = [x["id"] for x in fb.load_sites()["sites"]]
-        night = lambda check: {i: {"status": "ok", "rain_check": check, "mtr_mean": 123.0} for i in ids}
+        night = lambda check: {i: {"status": "ok", "rain_check": check, "mtr_mean": 123.0, "south_km": 1000.0} for i in ids}
         prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-05": night("BirdCast gaps and weather"), "2026-11-04": night("BirdCast gaps only")}}
         asked = []
-        with mock.patch.object(fb, "fetch_wet_hours", side_effect=lambda sites, first, **k: asked.append(first) or {}), mock.patch.object(fb, "get_day", return_value=None):
+        with mock.patch.object(fb, "fetch_wet_hours", side_effect=lambda sites, first, last=None, **k: asked.append(first) or {}), mock.patch.object(fb, "get_day", return_value=None):
             doc = fb.build(n_nights=3, end=date(2026, 11, 7), reuse=prev)   # nights Nov 7 and 6 are always re-read; Nov 5 is old enough to keep
         self.assertEqual(doc["nights"]["2026-11-05"]["KNQA"]["mtr_mean"], 123.0)
         self.assertEqual(len(asked), 1)
@@ -102,13 +133,13 @@ class WeatherFailureTests(unittest.TestCase):
 
     def test_a_night_that_skipped_the_weather_check_is_not_kept(self):
         ids = [x["id"] for x in fb.load_sites()["sites"]]
-        prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-04": {i: {"status": "ok", "rain_check": "BirdCast gaps only", "mtr_mean": 999.0} for i in ids}}}
+        prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-04": {i: {"status": "ok", "rain_check": "BirdCast gaps only", "mtr_mean": 999.0, "south_km": 1.0} for i in ids}}}
         with mock.patch.object(fb, "fetch_wet_hours", return_value={}), mock.patch.object(fb, "get_day", return_value=None):
             doc = fb.build(n_nights=1, end=date(2026, 11, 4) + timedelta(days=0), reuse=prev)
         self.assertNotEqual(doc["nights"]["2026-11-04"]["KNQA"].get("mtr_mean"), 999.0)
 
     def test_a_partly_missing_night_is_not_kept(self):
-        prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-03": {"KNQA": {"status": "ok", "rain_check": "BirdCast gaps and weather", "mtr_mean": 999.0}}}}
+        prev = {"record_version": fb.VERSION, "source": fb.SOURCE, "nights": {"2026-11-03": {"KNQA": {"status": "ok", "rain_check": "BirdCast gaps and weather", "mtr_mean": 999.0, "south_km": 1.0}}}}
         with mock.patch.object(fb, "fetch_wet_hours", return_value={}), mock.patch.object(fb, "get_day", return_value=None):
             doc = fb.build(n_nights=3, end=date(2026, 11, 5), reuse=prev)
         self.assertNotEqual(doc["nights"]["2026-11-03"]["KNQA"].get("mtr_mean"), 999.0)

@@ -1,0 +1,21 @@
+{
+  "note": "ASSUMED starting numbers, not measurements. Change them and rerun fetch_migration.py; nothing else needs to move. How they are used: docs/MODEL.md, section 'Migration tracker'.",
+  "ducks_total_millions": 33.439,
+  "ducks_total_source": "USFWS 2026 Waterfowl Population Status, Traditional Survey Area, May breeding index (as shown on the Ducks Unlimited graphic you supplied). It excludes this year's young and the Eastern Survey Area.",
+  "migratory_share": 0.70,
+  "flyway_share": 0.45,
+  "fall_flight_factor": 1.0,
+  "fall_flight_note": "1.0 uses the May index as the migrating pool. The real fall flight is larger because it adds this year's young; raise this once there is a source.",
+  "season_start": "10-15",
+  "season_end": "01-31",
+  "reference_years": [2024, 2025],
+  "duck_weight_note": "Radar sees every bird. Early in the window much of the night traffic is songbirds, so each night counts for less then. Linear between these knots (MM-DD, weight), 1.0 after the last. A placeholder to calibrate against Arkansas aerial surveys and your hunt log.",
+  "duck_weight": [["10-15", 0.15], ["11-01", 0.40], ["11-15", 0.80], ["12-01", 1.00]],
+  "boundaries_note": "A boundary is a line of latitude. The sites listed sit near it and say how fast birds cross it. north_at_start: share of the migratory pool north of the line on season_start. north_at_end: share still north of it after season_end (birds that winter there).",
+  "boundaries": [
+    {"lat": 45, "sites": ["KMPX", "KGRB", "KARX", "KAPX"], "north_at_start": 0.80, "north_at_end": 0.01},
+    {"lat": 42, "sites": ["KDMX", "KDVN", "KMKX", "KGRR"], "north_at_start": 0.90, "north_at_end": 0.04},
+    {"lat": 39, "sites": ["KEAX", "KLSX", "KILX", "KIND"], "north_at_start": 0.95, "north_at_end": 0.12},
+    {"lat": 36, "sites": ["KSGF", "KPAH", "KNQA", "KLZK"], "north_at_start": 0.98, "north_at_end": 0.30}
+  ]
+}

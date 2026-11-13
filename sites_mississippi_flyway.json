@@ -1,7 +1,7 @@
 {
-  "flyway": "Mississippi",
+  "flyway": "mississippi",
   "states": ["AL","AR","IL","IN","IA","KY","LA","MI","MN","MS","MO","OH","TN","WI"],
-  "note": "Coordinates were entered from memory and MUST be checked with `nexrad-pipeline verify-sites` before the first run.",
+  "note": "Coordinates were typed from memory; 40 of 41 matched the NWS station list within 0.05 degrees when checked (Nov 2026). KLIX (Slidell) is not in the NWS list and has no BirdCast or archive data.",
   "sites": [
     {"id":"KBMX","name":"Birmingham","state":"AL","lat":33.1722,"lon":-86.7697},
     {"id":"KEOX","name":"Fort Rucker","state":"AL","lat":31.4606,"lon":-85.4592},

@@ -1,0 +1,291 @@
+{
+ "flyway": "central",
+ "states": [
+  "CO",
+  "KS",
+  "MT",
+  "ND",
+  "NE",
+  "NM",
+  "OK",
+  "SD",
+  "TX",
+  "WY"
+ ],
+ "note": "Central Flyway radars (administrative flyway: ND, SD, NE, KS, OK, TX, and CO, WY, MT, NM east of the Continental Divide). Names and coordinates come from the NWS WSR-88D station list; every site has BirdCast profiles (checked Nov 2026). Western Montana, Wyoming, Colorado and New Mexico radars are left out on purpose: they sit in the Pacific Flyway.",
+ "sites": [
+  {
+   "id": "KBIS",
+   "name": "Bismarck",
+   "state": "ND",
+   "lat": 46.7708,
+   "lon": -100.7603
+  },
+  {
+   "id": "KMBX",
+   "name": "Minot AFB",
+   "state": "ND",
+   "lat": 48.3925,
+   "lon": -100.8644
+  },
+  {
+   "id": "KMVX",
+   "name": "Fargo/Grand Forks",
+   "state": "ND",
+   "lat": 47.5281,
+   "lon": -97.325
+  },
+  {
+   "id": "KABR",
+   "name": "Aberdeen",
+   "state": "SD",
+   "lat": 45.4558,
+   "lon": -98.413
+  },
+  {
+   "id": "KFSD",
+   "name": "Sioux Falls",
+   "state": "SD",
+   "lat": 43.5878,
+   "lon": -96.7289
+  },
+  {
+   "id": "KUDX",
+   "name": "Rapid City",
+   "state": "SD",
+   "lat": 44.1247,
+   "lon": -102.83
+  },
+  {
+   "id": "KOAX",
+   "name": "Omaha",
+   "state": "NE",
+   "lat": 41.3203,
+   "lon": -96.3668
+  },
+  {
+   "id": "KUEX",
+   "name": "Grand Island",
+   "state": "NE",
+   "lat": 40.3208,
+   "lon": -98.4419
+  },
+  {
+   "id": "KLNX",
+   "name": "North Platte",
+   "state": "NE",
+   "lat": 41.9579,
+   "lon": -100.5762
+  },
+  {
+   "id": "KGLD",
+   "name": "Goodland",
+   "state": "KS",
+   "lat": 39.3669,
+   "lon": -101.7003
+  },
+  {
+   "id": "KDDC",
+   "name": "Dodge City",
+   "state": "KS",
+   "lat": 37.7608,
+   "lon": -99.9689
+  },
+  {
+   "id": "KICT",
+   "name": "Wichita",
+   "state": "KS",
+   "lat": 37.6544,
+   "lon": -97.443
+  },
+  {
+   "id": "KTWX",
+   "name": "Topeka",
+   "state": "KS",
+   "lat": 38.9969,
+   "lon": -96.2325
+  },
+  {
+   "id": "KTLX",
+   "name": "Norman",
+   "state": "OK",
+   "lat": 35.3331,
+   "lon": -97.2777
+  },
+  {
+   "id": "KVNX",
+   "name": "Vance AFB",
+   "state": "OK",
+   "lat": 36.7408,
+   "lon": -98.1275
+  },
+  {
+   "id": "KINX",
+   "name": "Tulsa",
+   "state": "OK",
+   "lat": 36.175,
+   "lon": -95.5641
+  },
+  {
+   "id": "KFDR",
+   "name": "Altus AFB",
+   "state": "OK",
+   "lat": 34.3622,
+   "lon": -98.9767
+  },
+  {
+   "id": "KAMA",
+   "name": "Amarillo",
+   "state": "TX",
+   "lat": 35.2333,
+   "lon": -101.7093
+  },
+  {
+   "id": "KLBB",
+   "name": "Lubbock",
+   "state": "TX",
+   "lat": 33.6541,
+   "lon": -101.8142
+  },
+  {
+   "id": "KMAF",
+   "name": "Midland/Odessa",
+   "state": "TX",
+   "lat": 31.9435,
+   "lon": -102.1892
+  },
+  {
+   "id": "KSJT",
+   "name": "San Angelo",
+   "state": "TX",
+   "lat": 31.3711,
+   "lon": -100.4922
+  },
+  {
+   "id": "KDYX",
+   "name": "Dyess AFB",
+   "state": "TX",
+   "lat": 32.5383,
+   "lon": -99.2542
+  },
+  {
+   "id": "KFWS",
+   "name": "Dallas/Ft Worth",
+   "state": "TX",
+   "lat": 32.5728,
+   "lon": -97.3031
+  },
+  {
+   "id": "KGRK",
+   "name": "Ft Hood",
+   "state": "TX",
+   "lat": 30.7217,
+   "lon": -97.3828
+  },
+  {
+   "id": "KEWX",
+   "name": "Austin/San Antonio",
+   "state": "TX",
+   "lat": 29.704,
+   "lon": -98.0286
+  },
+  {
+   "id": "KDFX",
+   "name": "Laughlin AFB",
+   "state": "TX",
+   "lat": 29.2725,
+   "lon": -100.2803
+  },
+  {
+   "id": "KCRP",
+   "name": "Corpus Christi",
+   "state": "TX",
+   "lat": 27.7839,
+   "lon": -97.5108
+  },
+  {
+   "id": "KBRO",
+   "name": "Brownsville",
+   "state": "TX",
+   "lat": 25.9155,
+   "lon": -97.4186
+  },
+  {
+   "id": "KHGX",
+   "name": "Houston",
+   "state": "TX",
+   "lat": 29.4719,
+   "lon": -95.0789
+  },
+  {
+   "id": "KEPZ",
+   "name": "El Paso",
+   "state": "TX",
+   "lat": 31.873,
+   "lon": -106.698
+  },
+  {
+   "id": "KFTG",
+   "name": "Denver",
+   "state": "CO",
+   "lat": 39.7866,
+   "lon": -104.5458
+  },
+  {
+   "id": "KPUX",
+   "name": "Pueblo",
+   "state": "CO",
+   "lat": 38.4594,
+   "lon": -104.1814
+  },
+  {
+   "id": "KCYS",
+   "name": "Cheyenne",
+   "state": "WY",
+   "lat": 41.1519,
+   "lon": -104.8061
+  },
+  {
+   "id": "KRIW",
+   "name": "Riverton/Lander",
+   "state": "WY",
+   "lat": 43.0661,
+   "lon": -108.4773
+  },
+  {
+   "id": "KBLX",
+   "name": "Billings",
+   "state": "MT",
+   "lat": 45.8538,
+   "lon": -108.6068
+  },
+  {
+   "id": "KGGW",
+   "name": "Glasgow",
+   "state": "MT",
+   "lat": 48.2064,
+   "lon": -106.6247
+  },
+  {
+   "id": "KTFX",
+   "name": "Great Falls",
+   "state": "MT",
+   "lat": 47.4597,
+   "lon": -111.3853
+  },
+  {
+   "id": "KFDX",
+   "name": "Cannon AFB",
+   "state": "NM",
+   "lat": 34.6342,
+   "lon": -103.6189
+  },
+  {
+   "id": "KABX",
+   "name": "Albuquerque",
+   "state": "NM",
+   "lat": 35.1497,
+   "lon": -106.8239
+  }
+ ]
+}
