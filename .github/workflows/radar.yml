@@ -1,15 +1,12 @@
 name: radar
 on:
   schedule:
-    - cron: "30 15 * * *"   # 15:30 UTC: every Mississippi Flyway night has ended and the archive has caught up
+    - cron: "30 2 * * *"   # 02:30 UTC: BirdCast posts a UTC day's file about 01:05 UTC the next day, so by now last night is complete
   workflow_dispatch:
     inputs:
-      days:
-        description: "How many nights to process, newest first"
+      nights:
+        description: "How many nights to build, newest first"
         default: "10"
-      sites:
-        description: "Comma-separated radar ids for a smoke test (empty = all 41)"
-        default: ""
 permissions:
   contents: write   # pushes the radar-data branch
   actions: write    # starts the Pages deploy afterwards
@@ -19,25 +16,25 @@ concurrency:
 jobs:
   nightly:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - run: pip install -e ./radar   # editable: the site list is read from radar/config next to the package
-      - name: Restore earlier nights from the last published file
-        run: |
-          git fetch --depth=1 origin radar-data 2>/dev/null && git show FETCH_HEAD:nightly.json > prev.json || echo "no earlier file"
-          if [ -s prev.json ]; then nexrad-pipeline seed --from prev.json --out data; fi
-      - name: Process the last nights and export
+      - name: Restore the last published file (older nights are kept, only new ones are fetched)
+        run: git fetch --depth=1 origin radar-data 2>/dev/null && git show FETCH_HEAD:nightly.json > prev.json || echo "no earlier file"
+      - name: Build nightly.json from BirdCast's public profiles
         env:
-          DAYS: ${{ inputs.days || '10' }}
-          SITES: ${{ inputs.sites }}
-        run: |
-          nexrad-pipeline daily --days "$DAYS" ${SITES:+--sites "$SITES"} --workers 4 --stride-min 60 --budget-minutes 300 --out data --dest nightly.json
+          NIGHTS: ${{ inputs.nights || '10' }}
+        run: python3 fetch_birdcast.py --nights "$NIGHTS" --reuse prev.json --out nightly.json
       - name: Publish nightly.json on the radar-data branch
         run: |
-          python -c "import json,sys; sys.exit(0 if json.load(open('nightly.json'))['nights'] else 1)" || { echo "no nights processed, not publishing"; exit 1; }
+          python3 -c "
+          import json, sys
+          d = json.load(open('nightly.json'))
+          ok = sum(1 for n in d['nights'].values() for r in n.values() if r['status'] == 'ok')
+          print('ok site-nights:', ok)
+          sys.exit(0 if ok >= 20 else 1)" || { echo "too little data, not publishing"; exit 1; }
           mkdir out && cp nightly.json out/ && cd out
           git init -q -b radar-data
           git config user.name "radar-bot" && git config user.email "radar-bot@users.noreply.github.com"
