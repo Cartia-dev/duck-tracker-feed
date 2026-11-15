@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Write a snow-daily/1 file (see docs/DATA_CONTRACTS.md): snow depth on a 1 degree grid, observed then forecast.
+"""Write a snow-daily/1 file (see docs/DATA_CONTRACTS.md): snow depth on a half degree grid, observed then forecast.
 
   python3 feed/fetch_snow.py --out snow.json
   python3 feed/fetch_snow.py --out pipeline/examples/snow_sample.json        # the test fixture
 
 Observed days: NOAA NOHRSC SNODAS snow depth (about 1 km, daily, posted by about 11 UTC; product 1036) from the NSIDC archive,
-averaged to 1 degree cells. Forecast days: the last observed depth plus the change in the Open-Meteo model's snow depth since that day
-(new snow and melt), so a model that disagrees with the observation only moves it, never replaces it. If the model cannot be reached the
+averaged to half degree cells. Forecast days: the last observed depth plus the change in the Open-Meteo model's snow depth since that day
+(new snow and melt), so a model that disagrees with the observation only moves it, never replaces it. The model is asked at one degree
+points only (a quarter of the requests) and its change is blended onto the half degree cells. If the model cannot be reached the
 last observed depth is carried forward and the file says so (forecast_method).
 SNODAS covers the lower 48 and a little of Canada (to 52.875 N); cells outside it are written as 0.
 Needs numpy. feed/.github/workflows/fronts.yml runs it every 6 hours next to the fronts job.
@@ -16,7 +17,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 
-GRID = {"lat0": 30.0, "lon0": -115.0, "d": 1.0, "nlat": 26, "nlon": 51}   # row-major, south to north, west to east
+GRID = {"lat0": 30.0, "lon0": -115.0, "d": 0.5, "nlat": 51, "nlon": 101}   # row-major, south to north, west to east; half degree cells (was one degree until Nov 15 2026)
+MODEL_EVERY = 2                            # the forecast model is asked at every second cell in each direction (one degree points)
 COLS, ROWS = 6935, 3351                    # SNODAS masked CONUS grid, 30 arc-second pixels, big-endian int16 millimetres, -9999 = no data
 RES, LEFT, TOP = 1 / 120, -124.7333333333, 52.875
 MM_PER_IN, CAP_MM, MIN_COVER = 25.4, 1500, 0.2   # cap pixels at about 60 in so glacier cells do not swamp a cell mean; need 20% valid pixels
@@ -58,15 +60,16 @@ def snodas_depth(day):
 
 
 def cell_means(a):
-    """1 degree cell means in inches, shape (nlat, nlon); NaN where less than MIN_COVER of the cell has data."""
+    """Cell means in inches, shape (nlat, nlon); NaN where less than MIN_COVER of the cell has data."""
     out = np.full((GRID["nlat"], GRID["nlon"]), np.nan, dtype=np.float32)
-    per = int(round(1 / RES))
+    half = GRID["d"] / 2
+    per = int(round(GRID["d"] / RES))
     for i in range(GRID["nlat"]):
         lat = GRID["lat0"] + i * GRID["d"]
-        r0 = int(round((TOP - (lat + .5)) / RES))
+        r0 = int(round((TOP - (lat + half)) / RES))
         for j in range(GRID["nlon"]):
             lon = GRID["lon0"] + j * GRID["d"]
-            c0 = int(round(((lon - .5) - LEFT) / RES))
+            c0 = int(round(((lon - half) - LEFT) / RES))
             ra, rb, ca, cb = max(r0, 0), min(r0 + per, ROWS), max(c0, 0), min(c0 + per, COLS)
             if rb <= ra or cb <= ca:
                 continue
@@ -95,6 +98,22 @@ def model_depths(cells, days):
     return out
 
 
+def spread_change(coarse):
+    """A change known at every MODEL_EVERY-th cell (NaN where unknown), blended onto every cell: linear between the known points, 0 where none is near."""
+    n = MODEL_EVERY
+    c = np.where(np.isnan(coarse), 0.0, coarse)
+    out = np.zeros((GRID["nlat"], GRID["nlon"]), dtype=np.float32)
+    ci, cj = c.shape
+    for i in range(GRID["nlat"]):
+        a, fi = min(i // n, ci - 1), (i % n) / n
+        a2 = min(a + 1, ci - 1)
+        for j in range(GRID["nlon"]):
+            b, fj = min(j // n, cj - 1), (j % n) / n
+            b2 = min(b + 1, cj - 1)
+            out[i, j] = (c[a, b] * (1 - fj) + c[a, b2] * fj) * (1 - fi) + (c[a2, b] * (1 - fj) + c[a2, b2] * fj) * fi
+    return out
+
+
 def build(back_days=6, ahead_days=6, forecast=True):
     today = datetime.now(timezone.utc).date()
     latest = depth = None
@@ -118,7 +137,7 @@ def build(back_days=6, ahead_days=6, forecast=True):
     fdays = [latest + timedelta(days=k) for k in range(1, ahead_days + 1)]
     model = None
     if forecast and ahead_days:
-        cells = [(i, j) for i in range(GRID["nlat"]) for j in range(GRID["nlon"])
+        cells = [(i, j) for i in range(0, GRID["nlat"], MODEL_EVERY) for j in range(0, GRID["nlon"], MODEL_EVERY)
                  if GRID["lat0"] + i * GRID["d"] >= MODEL_MIN_LAT and not np.isnan(base[i, j])]
         try:
             model = model_depths(cells, [latest] + fdays)
@@ -130,12 +149,14 @@ def build(back_days=6, ahead_days=6, forecast=True):
     for d in fdays:
         m = base.copy()
         if model:
+            coarse = np.full((len(range(0, GRID["nlat"], MODEL_EVERY)), len(range(0, GRID["nlon"], MODEL_EVERY))), np.nan, dtype=np.float32)
             for (i, j), v in model.items():
                 if latest in v and d in v:
-                    m[i, j] = max(0.0, base[i, j] + v[d] - v[latest])
+                    coarse[i // MODEL_EVERY, j // MODEL_EVERY] = v[d] - v[latest]
+            m = np.where(np.isnan(base), base, np.maximum(0.0, base + spread_change(coarse)))
         days[d.isoformat()] = m
     kinds = {d.isoformat(): ("observed" if d <= latest else "forecast") for d in list(obs) + fdays}
-    flat = {k: [0.0 if np.isnan(x) or x < .05 else round(float(x), 1) for x in days[k].ravel()] for k in sorted(days)}
+    flat = {k: [0 if np.isnan(x) or x < .05 else round(float(x), 1) for x in days[k].ravel()] for k in sorted(days)}   # 0, not 0.0: most cells are bare and the file is four times the cells
     return {"schema": "snow-daily/1", "synthetic": False, "units": "inches", "grid": GRID, "days": flat, "kinds": kinds,
             "observed_through": latest.isoformat(), "forecast_method": method,
             "source": "NOAA NOHRSC SNODAS (NSIDC G02158) with Open-Meteo.com model change for forecast days",
